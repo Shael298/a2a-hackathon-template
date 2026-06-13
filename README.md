@@ -14,6 +14,61 @@ A working two-agent starter for the A2A Hackathon track. You build:
 Fork it, make it smarter, submit your repo at
 [hackathon.a2anet.com](https://hackathon.a2anet.com).
 
+## Our build (what we changed and why)
+
+This fork tunes the two ADK agents for tau2-bench Rho-Bank. Reward is dominated
+by landing the bank database in the expected end-state — the exact correct env
+tool calls with exact arguments — so every change below serves retrieval
+quality and tool-call precision, within the unchanged compose/contextId/model
+contract documented under **"What you can't change."**
+
+**Retrieval (the biggest, cheapest win).** Vector search is made real and wide:
+
+- **Pre-baked embeddings.** `cs_agent/precompute_embeddings.py` embeds all 698
+  KB docs (`gemini-embedding-001`, 768-dim) into `kb/embeddings.json`, baked
+  into the image. Startup is instant and there is zero repeat embedding cost at
+  grade time — the vectors graded are exactly the ones we baked.
+- **Wider recall.** Default `top_k` raised 5 → 20 (`cs_agent/rag_tools.py`); a
+  single "best account" question can span 20+ docs whose terms are split across
+  files, so 5 starved the agent.
+- **Hybrid search.** A new `kb_search` tool merges BM25 + HNSW vector results,
+  de-duplicated by `doc_id`, so one call covers both keyword and
+  natural-language matches.
+- **Query-embedding cache (Redis).** Repeat semantic queries reuse a cached
+  vector (TTL'd, KB-query-only — never user data), trimming credit + latency.
+
+**Customer-service behaviour (`cs_agent/agent.py`).** A detailed operating
+procedure: retrieve thoroughly per candidate then stop; beat the numeric trap
+by computing each option's real cost for the user's usage (stacked fees, free
+allowances, eligibility) instead of trusting marketing labels; verify identity
+with 2-of-4 factors before any account access; follow the discoverable-tool
+protocol exactly (`unlock_discoverable_agent_tool` before
+`call_discoverable_agent_tool`, only unlock what you'll call); exact arguments,
+never placeholders; stay within the step/time budget so a run never times out.
+
+**Personal agent (`personal_agent/agent.py`).** Faithful two-way relay,
+ask-the-user-for-exactly-what-CS-needs, confirm before user-side tools, and
+stranger-robustness — it stays standard and never stalls so it composes cleanly
+with a held-out CS agent in cross-pairing scoring.
+
+### Sponsor integrations
+
+- **Google** — the core: `gemini-3.5-flash` on both agents via **Vertex AI**
+  (API-key auth on our GCP credits), **ADK** (`LlmAgent`, `to_a2a`), and
+  `gemini-embedding-001` for RAG.
+- **Redis** — context retrieval is RediSearch BM25 + HNSW vector over the KB,
+  plus a session-scoped **shared "case file"** both agents can read/write
+  within one conversation (`case_file.py`), keyed by the A2A `contextId` with a
+  short TTL. It never spans contextIds (so it respects the statelessness rule)
+  and degrades gracefully — Redis's "shared memory that connects agents" in its
+  score-safe form, not disallowed cross-session memory. A query-embedding cache
+  rounds out the Redis usage.
+- **Sierra** — the harness *is* tau2-bench; we honour it by nailing CS
+  behaviour against the Rho-Bank domain.
+- **LinkUp** — intentionally not used: this is a closed-book KB/policy domain,
+  so web answers would risk contradicting the KB and producing a wrong tool
+  call (reward 0).
+
 ## Rules
 
 - Both agents must run on **`gemini-3.5-flash`** (the template default).

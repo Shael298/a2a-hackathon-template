@@ -7,6 +7,7 @@ kb_search_vector: HNSW vector search over gemini-embedding-001 embeddings
 Replies are parsed via execute_command so both the classic array reply and
 the Redis 8 map-style reply work regardless of redis-py version."""
 
+import hashlib
 import os
 import re
 import struct
@@ -18,6 +19,16 @@ KB_INDEX = "kb_idx"
 DOC_PREFIX = "doc:"
 EMBEDDING_MODEL = "gemini-embedding-001"
 EMBEDDING_DIM = 768
+
+# Default retrieval width. The KB splits one account's terms across several
+# docs and a single "best option" question can need ~20+ docs (e.g. task_001
+# spans 24), so 5 is far too low. Wider recall is the cheapest accuracy win.
+DEFAULT_TOP_K = 20
+
+# Query-embedding cache: KB query vectors only (NOT user data), keyed by query
+# hash with a TTL, so repeat semantic searches skip the embedding API call.
+QUERY_EMBED_CACHE_TTL_S = 86400
+_QEMB_PREFIX = "qemb:"
 
 _client = redis.Redis.from_url(REDIS_URL, decode_responses=False)
 _genai_client = None
@@ -44,6 +55,27 @@ def _embed(texts: list[str]) -> list[list[float]]:
         config=types.EmbedContentConfig(output_dimensionality=EMBEDDING_DIM),
     )
     return [e.values for e in result.embeddings]
+
+
+def _embed_query(query: str) -> list[float]:
+    """Embed one query, caching the vector in Redis (TTL) to cut repeat
+    embedding cost + latency. Safe: only KB query text is cached, never any
+    user/session data, so this respects per-conversation isolation."""
+    cache_key = _QEMB_PREFIX + hashlib.sha1(query.encode()).hexdigest()
+    try:
+        cached = _client.get(cache_key)
+        if cached is not None:
+            return list(struct.unpack(f"{EMBEDDING_DIM}f", cached))
+    except Exception:
+        pass
+    vector = _embed([query])[0]
+    try:
+        _client.setex(
+            cache_key, QUERY_EMBED_CACHE_TTL_S, struct.pack(f"{EMBEDDING_DIM}f", *vector)
+        )
+    except Exception:
+        pass
+    return vector
 
 
 def _decode(value) -> str:
@@ -77,7 +109,7 @@ def _strip_score(docs: list[dict]) -> list[dict]:
     return docs
 
 
-def kb_search_bm25(query: str, top_k: int = 5) -> list[dict]:
+def kb_search_bm25(query: str, top_k: int = DEFAULT_TOP_K) -> list[dict]:
     """Full-text (BM25) search over the Rho-Bank knowledge base.
 
     Args:
@@ -101,7 +133,7 @@ def kb_search_bm25(query: str, top_k: int = 5) -> list[dict]:
     return _parse_search_reply(reply)
 
 
-def kb_search_vector(query: str, top_k: int = 5) -> list[dict]:
+def kb_search_vector(query: str, top_k: int = DEFAULT_TOP_K) -> list[dict]:
     """Semantic (vector) search over the Rho-Bank knowledge base.
 
     Better than kb_search_bm25 when the query is a natural-language question
@@ -116,7 +148,7 @@ def kb_search_vector(query: str, top_k: int = 5) -> list[dict]:
         entry telling you to fall back to kb_search_bm25.
     """
     try:
-        vector = struct.pack(f"{EMBEDDING_DIM}f", *_embed([query])[0])
+        vector = struct.pack(f"{EMBEDDING_DIM}f", *_embed_query(query))
         reply = _client.execute_command(
             "FT.SEARCH", KB_INDEX, f"*=>[KNN {top_k} @embedding $vec AS score]",
             "PARAMS", "2", "vec", vector,
@@ -133,3 +165,27 @@ def kb_search_vector(query: str, top_k: int = 5) -> list[dict]:
                 "Use kb_search_bm25 with keywords instead."
             }
         ]
+
+
+def kb_search(query: str, top_k: int = DEFAULT_TOP_K) -> list[dict]:
+    """Hybrid knowledge-base search: PREFER THIS for most questions.
+
+    Runs semantic (vector) and keyword (BM25) search and merges them,
+    de-duplicated by doc_id, so you get both natural-language and exact-term
+    matches in one call and rarely need to search the same topic twice.
+
+    Args:
+        query: A natural-language question or keywords. Extra terms help.
+        top_k: Target number of documents to return.
+
+    Returns:
+        Merged, de-duplicated documents with doc_id, title, and full content.
+    """
+    merged: dict[str, dict] = {}
+    vector_hits = kb_search_vector(query, top_k=top_k)
+    if not (len(vector_hits) == 1 and vector_hits[0].get("error")):
+        for doc in vector_hits:
+            merged.setdefault(doc.get("doc_id") or f"_v{len(merged)}", doc)
+    for doc in kb_search_bm25(query, top_k=top_k):
+        merged.setdefault(doc.get("doc_id") or f"_b{len(merged)}", doc)
+    return list(merged.values())[: max(top_k, 1)]
