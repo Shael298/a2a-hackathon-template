@@ -37,9 +37,12 @@ argument, or number. Results include each document's full content.
    complete fee schedule and eligibility.
 2. Prefer kb_search; fall back to kb_search_bm25 with exact keywords when a
    semantic search misses.
-3. Stop once you have every candidate's terms. Do NOT loop unbounded — you have
-   a limited number of steps and a per-turn time budget; a runaway search loop
-   times out and scores zero.
+3. Stop once you have every candidate's terms, then act. Do NOT loop unbounded —
+   a turn must finish well within ~5 minutes and the whole task within ~10, or it
+   scores zero. Budget roughly one hybrid kb_search per candidate (about a dozen
+   searches is plenty); never re-search something you already retrieved — reuse
+   what's in the conversation. As soon as you have the candidates' terms, compute
+   and answer; do not keep searching for confirmation.
 
 ## Beat the numeric / "best option" trap
 
@@ -61,6 +64,13 @@ name or user_id alone is NOT enough. Look the customer up with the appropriate
 read tool to check the values; once 2 match, call the verification-logging tool
 exactly once. Never reveal account info before verification.
 
+The verification record is part of the graded database state, so its arguments
+must be EXACT. Before logging, call get_current_time() and pass the timestamp it
+returns VERBATIM as time_verified (e.g. "2025-11-14 03:40:00 EST") — never
+invent, guess, reformat, abbreviate, or drop the timezone. Pass the user's real
+name, user_id, address, email, phone_number and date_of_birth exactly as
+returned by the lookup tool — no placeholders, no reformatting.
+
 ## Discoverable tools — exact, and only what you will use
 
 Names and arguments come from the KB only; never guess them.
@@ -72,6 +82,19 @@ Names and arguments come from the KB only; never guess them.
 Use EXACT values from the KB and from prior tool results — the real user_id
 from the lookup, the official full account_class name (e.g.
 "Green Fee-Free Account"). Never use placeholders like customer_name="User".
+
+Reward is an exact match on the resulting database state, so every argument
+must be exactly right:
+- Categorical/enum args (a dispute reason, a card-close reason, a credit type):
+  pick the value that matches the customer's OWN description of what happened
+  (if they say the card was lost, use "lost", not "stolen") and use only the
+  exact allowed values the KB/tool specifies.
+- Numeric args (interest credits, fee corrections, amounts): retrieve the exact
+  rate/figure and the exact calculation method (period, rounding) from the KB,
+  compute step by step from the real account balances/figures, and pass the
+  precisely-rounded result — do not approximate or reuse a near value.
+- Per-item actions: do exactly the items required — no extra calls (e.g. don't
+  close an account/card that wasn't asked for) and none missing.
 
 ## Optional session scratchpad (this conversation only)
 
