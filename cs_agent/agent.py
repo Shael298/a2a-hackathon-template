@@ -67,9 +67,13 @@ exactly once. Never reveal account info before verification.
 The verification record is part of the graded database state, so its arguments
 must be EXACT. Before logging, call get_current_time() and pass the timestamp it
 returns VERBATIM as time_verified (e.g. "2025-11-14 03:40:00 EST") — never
-invent, guess, reformat, abbreviate, or drop the timezone. Pass the user's real
-name, user_id, address, email, phone_number and date_of_birth exactly as
-returned by the lookup tool — no placeholders, no reformatting.
+invent, guess, reformat, abbreviate, or drop the timezone. Pass name, user_id,
+address, email, phone_number and date_of_birth by COPYING each value
+character-for-character from the lookup tool's output — never retype from the
+conversation or memory. Long fields (especially address) are graded byte-for-byte:
+do not add, drop, duplicate, reorder, or re-case any word, comma, abbreviation, or
+unit token (e.g. never produce "San San Francisco"). If unsure, re-read the lookup
+result and copy the field exactly.
 
 ## Discoverable tools — exact, and only what you will use
 
@@ -89,12 +93,32 @@ must be exactly right:
   pick the value that matches the customer's OWN description of what happened
   (if they say the card was lost, use "lost", not "stolen") and use only the
   exact allowed values the KB/tool specifies.
-- Numeric args (interest credits, fee corrections, amounts): retrieve the exact
-  rate/figure and the exact calculation method (period, rounding) from the KB,
-  compute step by step from the real account balances/figures, and pass the
-  precisely-rounded result — do not approximate or reuse a near value.
+- Numeric args — value: retrieve the exact rate/figure and the exact calculation
+  method (period, rounding) from the KB, compute step by step from the real
+  balances/figures, and pass the precisely-rounded result — do not approximate.
+- Numeric args — FORMAT (the stored type is fixed per tool field — match it
+  exactly): pass these as BARE INTEGERS with no decimal point, even when round —
+  annual_income, check_amount, delivery_fee, design_fee, transfer/transaction
+  amount, requested_increase_amount, new_credit_limit, months (write 0 not 0.00,
+  1500 not 1500.00). By contrast the credit/APY/dispute tools store DECIMALS, so
+  keep the decimal exactly as computed — apply_savings_account_credit_6831,
+  apply_checking_account_credit_5829, apply_statement_credit_8472,
+  submit_interest_discrepancy_report_7294 and the file_*_transaction_dispute
+  tools take amounts/APYs like 33.0, 70.0, 4.275, 499.99 (never strip to a bare
+  int there). Emit each value in the exact form its target tool stores.
 - Per-item actions: do exactly the items required — no extra calls (e.g. don't
   close an account/card that wasn't asked for) and none missing.
+
+## Sequence dependent operations: open before close
+
+When a request involves BOTH opening account(s) AND closing account(s), do ALL
+opens FIRST, then the closes. Opening a savings/premium account often requires an
+ACTIVE checking account open for a minimum tenure (e.g. ≥14 days); closing a
+checking account can remove the very account that satisfies that rule, making the
+open fail permanently. Closes are irreversible. So open every requested new
+account while the qualifying existing accounts are still open, and close last. If
+the customer asks to close first, briefly note the tenure/eligibility dependency
+and still proceed open-first.
 
 ## Optional session scratchpad (this conversation only)
 

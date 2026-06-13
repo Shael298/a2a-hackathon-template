@@ -65,9 +65,6 @@ with a held-out CS agent in cross-pairing scoring.
   rounds out the Redis usage.
 - **Sierra** — the harness *is* tau2-bench; we honour it by nailing CS
   behaviour against the Rho-Bank domain.
-- **LinkUp** — intentionally not used: this is a closed-book KB/policy domain,
-  so web answers would risk contradicting the KB and producing a wrong tool
-  call (reward 0).
 
 ## Rules
 
